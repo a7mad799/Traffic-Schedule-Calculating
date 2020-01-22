@@ -42,7 +42,6 @@ namespace AutoCAD_CSharp_plug_in1
             {
                 ed = doc.Editor;
                 
-                ed.WriteMessage("حبيبي ابو حميد يا وردتي ");
                 Debug.WriteLine("myCommand called");
 
             }
