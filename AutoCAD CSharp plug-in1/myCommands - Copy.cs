@@ -70,9 +70,8 @@ namespace AutoCAD_CSharp_plug_in1
                     double distance = 0;
                     BlockTableRecord btr = (BlockTableRecord)tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite);
                     RXClass lineClass = RXClass.GetClass(typeof(Line));
+                    int count = 0;
                     List<Line> myLines = new List<Line>();
-                    List<Shape> shapes = new List<Shape>();
-
                     foreach (SelectedObject so in psr.Value)
                     {
                         
@@ -89,89 +88,86 @@ namespace AutoCAD_CSharp_plug_in1
                             prevLine = line ;
                             firstline = false;
                         }
-                       
                     }
-
-                    Line curr = new Line();
-                    Line line1 = new Line();
-                    Line line2 = new Line();
-                    int i, foundLines, checkCount, nullCount = 0;
-                    for(int l = 0; l<myLines.Count ;l++)
+                    List<Line> arrowsLines = new List<Line>();
+                    bool newLine;
+                    //myLines.Sort();
+                    foreach (Line line1 in myLines)
                     {
-                        if (myLines[l] != null)
+                        newLine = true;
+                        foreach (Line line2 in myLines)
                         {
-                            Shape newShape = new Shape();
-                            newShape.lines.Add(myLines[l]);
-                            line1 = myLines[l];
-                            curr.EndPoint = line1.EndPoint;
-                            curr.StartPoint = line1.StartPoint;
-                            myLines[l] = null;
-                            nullCount++;
-                            checkCount = 0;
-                            i = 0;
-                            foundLines = 1;
-                            while (curr.EndPoint != curr.StartPoint && nullCount < myLines.Count)// checking adjacents
-                            {
-                                checkCount++;
-                                if (myLines[i] != null)
-                                {
-                                    line2 = myLines[i];
-                                    if (curr.EndPoint == line2.StartPoint && line1 != line2)
+                            if(line1.EndPoint == line2.EndPoint && !(line1.StartPoint == line2.StartPoint && line1.EndPoint == line2.EndPoint))
+                            {//get the arrows head lines
+                                for (int i=0; i<arrowsLines.Count; i++)
+                                {//to prevent head duplicates
+                                    if(arrowsLines[i].EndPoint == line1.EndPoint)
                                     {
-                                        checkCount = 0;
-                                        foundLines++;
-                                        curr.EndPoint = line2.EndPoint;
-                                        ed.WriteMessage(foundLines + "\t");
-                                        newShape.lines.Add(myLines[i]);
-                                        myLines[i] = null;
-                                    }
-                                    else if (curr.EndPoint == line2.EndPoint && line1 != line2)
-                                    {
-                                        checkCount = 0;
-                                        foundLines++;
-                                        curr.EndPoint = line2.StartPoint;
-                                        ed.WriteMessage(foundLines + "\t");
-                                       
-                                        newShape.lines.Add(myLines[i]);
-                                        myLines[i] = null;
-                                    }
-                                    if (foundLines == 100)
-                                    {
-                                        newShape = null;
-                                        ed.WriteMessage("\ninfinite loop");
-                                        break;
+                                        newLine = false;
                                     }
                                 }
-                                if (checkCount >= 2 * myLines.Count)
+                                if (newLine)
                                 {
-                                    newShape = null;
-                                    checkCount = 0;
-                                    ed.WriteMessage("\ninfinite checks");
-                                    break;
+                                    arrowsLines.Add(line1);
+                                    count++;
                                 }
-                              
-
                                 
-                                //break;  
-                                i = (i + 1) % myLines.Count;
-                            }
-                            if (newShape != null)
-                            {
-                                shapes.Add(newShape);
                             }
                         }
 
 
                     }
-
-                    foreach (Shape item in shapes)
+                    Line curr;
+                    int foundLines;
+                    List<Line> nearLines;
+                    foreach (Line line1 in arrowsLines)
                     {
-                        foreach (Line linew in item.lines)
+                        foundLines = 1;
+                        curr = new Line();
+                        curr.EndPoint = line1.EndPoint;
+                        nearLines = new List<Line>();
+                        foreach (Line line3 in myLines)
                         {
-                            ed.WriteMessage("\nstart point" + linew.StartPoint);
-
+                            curr.StartPoint = line3.StartPoint;
+                            if(curr.Length < 4)
+                            {
+                                nearLines.Add(line3);
+                            }
                         }
-                    }
+                        int i = 0;
+                        Line line2;
+                        while (curr.EndPoint != line1.StartPoint)// checking ajacents
+                        {
+                            line2 = nearLines[i];
+                            if (curr.EndPoint == line2.StartPoint && line1 != line2)
+                            {
+                                foundLines++;
+                                curr.EndPoint = line2.EndPoint;
+                                ed.WriteMessage(foundLines + "\t");
+                            }
+                            else if (curr.EndPoint == line2.EndPoint && line1 != line2)
+                            {
+                                foundLines++;
+                                curr.EndPoint = line2.StartPoint;
+                                ed.WriteMessage(foundLines + "\t");
+
+
+                            }
+                            if (foundLines == 100)
+                            {
+                                ed.WriteMessage("\ninfinite loop");
+                                break;
+                            }
+                            i=(i+1)%nearLines.Count;
+                        }
+                            
+                        if (foundLines == 7 || foundLines == 13 || foundLines == 9)// infinite looooooooooooooop do not start
+                        {
+                            ed.WriteMessage("real arrow\n");
+                        }
+                        
+                    }                           
+
                     //ed.WriteMessage("\n" + arrowsLines.Count);
                     tr.Commit();
                 }
@@ -230,8 +226,8 @@ namespace AutoCAD_CSharp_plug_in1
         {
             return lines[0].StartPoint;
         }
-        public List<Line> lines = new List<Line>();
-        public int height;
+        protected List<Line> lines;
+        protected int height;
     }
 
 
@@ -246,7 +242,7 @@ namespace AutoCAD_CSharp_plug_in1
         {
             return false;
         }
-        public List<Line> headLines;
+        protected List<Line> headLines;
     }
 
 }
