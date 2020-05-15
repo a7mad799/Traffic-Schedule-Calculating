@@ -8,6 +8,8 @@ using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
 using Autodesk.AutoCAD.EditorInput;
 using System.Collections.Generic;
+using Decider;
+using System.Linq;
 
 // This line is not mandatory, but improves loading performances
 [assembly: CommandClass(typeof(AutoCAD_CSharp_plug_in1.MyCommands))]
@@ -50,6 +52,7 @@ namespace AutoCAD_CSharp_plug_in1
         [CommandMethod("MyGroup", "CalculateSchedule", "MyPickFirstLocal", CommandFlags.Modal | CommandFlags.UsePickSet)]
         public void CalculateSchedule() // This method can have any name
         {
+           // var s = new Decider.Csp.Integer.VariableInteger();
             Document doc = Application.DocumentManager.MdiActiveDocument;
             Database db = doc.Database;
             Editor ed = doc.Editor;
@@ -77,8 +80,10 @@ namespace AutoCAD_CSharp_plug_in1
                     {
                         
                         if (so.ObjectId.ObjectClass.IsDerivedFrom(lineClass))
-                        {
+                        { 
+                            //this variable reads the selected objects then we choose the lines only for analyzing
                             Line line = (Line)tr.GetObject(so.ObjectId, OpenMode.ForRead);
+                            line = (Line)tr.GetObject(so.ObjectId, OpenMode.ForWrite);
                             myLines.Add(line);
 
 
@@ -116,7 +121,7 @@ namespace AutoCAD_CSharp_plug_in1
                                 if (myLines[i] != null)
                                 {
                                     line2 = myLines[i];
-                                    if (curr.EndPoint == line2.StartPoint && line1 != line2)
+                                    if ((curr.EndPoint - line2.StartPoint).Length < 0.001 && line1 != line2)
                                     {
                                         checkCount = 0;
                                         foundLines++;
@@ -124,16 +129,20 @@ namespace AutoCAD_CSharp_plug_in1
                                         ed.WriteMessage(foundLines + "\t");
                                         newShape.lines.Add(myLines[i]);
                                         myLines[i] = null;
+                                        nullCount++;
+
                                     }
-                                    else if (curr.EndPoint == line2.EndPoint && line1 != line2)
+                                    else if ((curr.EndPoint - line2.EndPoint).Length < 0.001 && line1 != line2)
                                     {
                                         checkCount = 0;
                                         foundLines++;
                                         curr.EndPoint = line2.StartPoint;
                                         ed.WriteMessage(foundLines + "\t");
-                                       
+                                        myLines[i].ReverseCurve();
                                         newShape.lines.Add(myLines[i]);
                                         myLines[i] = null;
+                                        nullCount++;
+
                                     }
                                     if (foundLines == 100)
                                     {
@@ -142,7 +151,7 @@ namespace AutoCAD_CSharp_plug_in1
                                         break;
                                     }
                                 }
-                                if (checkCount >= 2 * myLines.Count)
+                                if (checkCount > 2 * myLines.Count)
                                 {
                                     newShape = null;
                                     checkCount = 0;
@@ -155,23 +164,203 @@ namespace AutoCAD_CSharp_plug_in1
                                 //break;  
                                 i = (i + 1) % myLines.Count;
                             }
-                            if (newShape != null)
+                            if (newShape != null && (curr.EndPoint - curr.StartPoint).Length < 0.001)
                             {
+                                // new shapae has been analyzed 
                                 shapes.Add(newShape);
                             }
                         }
 
 
                     }
-
+                    //Point3d temp;
                     foreach (Shape item in shapes)
                     {
-                        foreach (Line linew in item.lines)
+                        if (item.lines.Count == 4 && item.lines[0].Length - item.lines[2].Length < 0.0001
+                                                  && item.lines[1].Length - item.lines[3].Length < 0.0001)
                         {
-                            ed.WriteMessage("\nstart point" + linew.StartPoint);
+                            item.Type = "pedestrian";
+                        }
+                        else if (item.lines.Count > 6)
+                        {
+                            double angle, len1, len2;
+                            Line virtu = new Line();
+
+                            for (int l = 0; l <item.lines.Count; l++)
+                            {
+
+                                if (Math.Abs(item.lines[l].Angle - (item.lines[(l + 2) % item.lines.Count].Angle + Math.PI) % (Math.PI*2))<0.01 &&
+                                    Math.Abs(item.lines[l].Angle % Math.PI - (item.lines[(l + 1) % item.lines.Count].Angle + (Math.PI/2)) % Math.PI) < 0.01)
+                                {
+                                    item.startAngle = item.lines[(l + 2) % item.lines.Count].Angle;
+                                    ed.WriteMessage("\nstartAngle" + item.startAngle);
+
+                                }
+                                if (item.lines[l].Angle == item.lines[(l+3)% item.lines.Count].Angle)
+                                {
+                                    item.Type = "arrow";
+                                    //item.lines[l].ColorIndex = 1;
+                                    //    angle = (item.lines[l].Angle - Math.PI / 2)% (Math.PI*2);
+                                    //  if (item.lines[(l + 1) % item.lines.Count].EndPoint == item.lines[(l + 2) % item.lines.Count].StartPoint)
+                                    virtu.StartPoint = item.lines[(l + 1) % item.lines.Count].EndPoint;
+                                    virtu.EndPoint = new Point3d(item.lines[l].StartPoint.X + Math.Cos(item.lines[l].Angle + Math.PI / 2) * 1
+                                                               , item.lines[l].StartPoint.Y + Math.Sin(item.lines[l].Angle + Math.PI / 2) * 1, 0);
+                                    len1 = virtu.Length;
+                                    //virtu.ColorIndex = 1;
+                                    //btr.AppendEntity(virtu);
+                                    //tr.AddNewlyCreatedDBObject(virtu, true);
+
+                                    virtu.EndPoint = new Point3d(item.lines[l].StartPoint.X + Math.Cos(item.lines[l].Angle - Math.PI / 2) * 1
+                                                              , item.lines[l].StartPoint.Y + Math.Sin(item.lines[l].Angle - Math.PI / 2) * 1, 0);
+                                    len2 = virtu.Length;
+                                    //virtu.ColorIndex = 2;
+                                    
+
+                                    if (len1 < len2)// here we find the direction of each arrow
+                                        angle = item.lines[l].Angle + Math.PI / 2;
+                                    else
+                                        angle = item.lines[l].Angle - Math.PI / 2;
+                                    /*
+                                    if ((item.lines[l].Angle + Math.PI / 2 - item.lines[(l + 1) % item.lines.Count].Angle) % (Math.PI * 2) < Math.PI / 2)
+                                        angle = (item.lines[l].Angle + Math.PI / 2);
+                                    else
+                                        angle = (item.lines[l].Angle - (Math.PI / 2));
+                                    */
+
+                                    angle = angle % (Math.PI * 2);
+                                    item.angles.Add( (angle + Math.PI * 2) % (Math.PI * 2) );
+                                    //item.lines[(l + 3) % item.lines.Count].ColorIndex = 1;
+                                    
+                                }
+                            }
 
                         }
+
+                        foreach (Line linew in item.lines)
+                        {// here we give a color for each detected shape
+                            if (item.Type == "pedestrian")
+                            {
+                                linew.ColorIndex = 2;// yellew color
+
+                            }
+                            if(item.Type == "arrow")
+                            {
+                                linew.ColorIndex = 1;// red Color
+                            }
+                            else
+                            {
+
+                            }
+                        }
+
                     }
+
+                    List<Shape> arrowsList = new List<Shape>();
+                    foreach (Shape item in shapes)
+                    {
+                        if (item.Type == "arrow")
+                        {
+                            arrowsList.Add(item);
+                        }
+                    }
+                    double distnce;
+                    for (int j = 0; j < arrowsList.Count; j++)
+                    {
+                        for (int d = 0; arrowsList[j] != null && d < arrowsList[j].angles.Count; d++)
+                        {
+                            //ed.WriteMessage("\nstartAngle" + item.startAngle);
+
+                            // here we analyze the the routes by the analyzed arrows
+                            if (arrowsList[j].getTurnAngle(d) < -0.01)
+                                continue;//ignore right turns
+                            var dists = new Dictionary<Shape, double>();
+                            Line connector = new Line();
+                            Shape secondArrow = new Shape();
+                            connector.StartPoint = arrowsList[j].getPosition();// this is the the entrance
+                            for (int k = 0; k < arrowsList.Count && arrowsList[j] != null; k++)
+                            {
+                                if (arrowsList[k] == null || arrowsList[k].getTurnAngle(0) < -0.01)
+                                    continue;
+
+                                connector.EndPoint = arrowsList[k].getPosition();
+                                distnce = arrowsList[j].getPosition().DistanceTo(arrowsList[k].getPosition());
+                                if (arrowsList[j].angles[d] == arrowsList[k].angles[0] && distnce > 10)
+                                {
+                                    if (Math.Abs(arrowsList[j].angles[d] - connector.Angle) < Math.PI / 2
+                                        || Math.Abs(arrowsList[j].angles[d] - connector.Angle) > 3 * Math.PI / 2)
+                                        dists.Add(arrowsList[k], distnce);
+                                }
+                            }
+                            if (dists.Count > 0)
+                            {
+                                double min = 999999;
+                                foreach (KeyValuePair<Shape, double> pair in dists)
+                                {
+                                    if (pair.Value < min)
+                                    {
+                                        min = pair.Value;
+                                        secondArrow = pair.Key;
+                                    }
+                                        
+                                }
+                                //secondArrow = dists.Aggregate((x, y) => x.Value < y.Value ? x : y).Key;
+                                connector.EndPoint = secondArrow.getPosition();// this is the route exit of the cross
+                                connector.ColorIndex = 4;
+
+                                if (arrowsList[j].getTurnAngle(d) > 0.01)//the case of left turn 
+                                {
+                                    double angle0 = arrowsList[j].startAngle;
+                                    double angle1 = secondArrow.startAngle;
+
+                                    double x0 = connector.StartPoint.X;
+                                    double y0 = connector.StartPoint.Y;
+                                    double m0 = Math.Tan(angle0 % Math.PI);
+                                    double x1 = connector.EndPoint.X;
+                                    double y1 = connector.EndPoint.Y;
+                                    double m1 = Math.Tan(angle1 % Math.PI);
+                                    double xTemp, yTemp;
+                                    if (angle0 % Math.PI == (Math.PI / 2))
+                                        xTemp = x0;
+                                    else if (angle1 % Math.PI == (Math.PI / 2))
+                                        xTemp = x1;
+                                    else
+                                        xTemp = ((m0 * x0) - (m1 * x1) + y1 - y0) / (m0 - m1);
+                                    if (angle0 % Math.PI != (Math.PI / 2))
+                                        yTemp = m0 * (xTemp - x0) + y0;
+                                    else
+                                        yTemp = y1;
+                            //        double xTemp = (connector.EndPoint.X * Math.Tan(secondArrow.startAngle) -
+                              //      connector.StartPoint.X * Math.Tan(arrowsList[j].startAngle) + connector.EndPoint.Y - connector.StartPoint.Y)
+                                //    / (Math.Tan(arrowsList[j].startAngle) - Math.Tan(secondArrow.startAngle));
+                                  //  double yTemp = Math.Tan(arrowsList[j].startAngle) * (xTemp - arrowsList[j].getPosition().X) + arrowsList[j].getPosition().Y;
+
+                                    //Point3d mid = new Point3d(connector.StartPoint.X, connector.EndPoint.Y, 0);
+                                    Point3d mid = new Point3d(xTemp, yTemp, 0);
+                                    Point3dCollection pntSet = new Point3dCollection();
+                                    pntSet.Add(connector.StartPoint);
+                                    pntSet.Add(mid);
+                                    pntSet.Add(connector.EndPoint);
+                                    //PolylineCurve3d leftTurn = new PolylineCurve3d(pntSet);
+                                    Polyline3d leftTurn = new Polyline3d(Poly3dType.CubicSplinePoly, pntSet, false);
+                                    //leftTurn.
+                                    leftTurn.ColorIndex = 4;
+                                    btr.AppendEntity(leftTurn); //drawing the left turns routes
+                                    tr.AddNewlyCreatedDBObject(leftTurn, true);
+                                }
+                                else
+                                {
+                                    btr.AppendEntity(connector); // drawing the straight routes
+                                    tr.AddNewlyCreatedDBObject(connector, true);
+                                }
+                                if (d == arrowsList[j].angles.Count - 1)
+                                    arrowsList[j] = null;
+                            }
+                        }
+                        
+                    }
+                  
+
+
                     //ed.WriteMessage("\n" + arrowsLines.Count);
                     tr.Commit();
                 }
@@ -226,27 +415,52 @@ namespace AutoCAD_CSharp_plug_in1
         {
             return lines;
         }
-        public Point3d getPosition(int h)
+        public Point3d getPosition()//this function returns the center of the shape coordinates
         {
-            return lines[0].StartPoint;
+            double positionX = 0;
+            double positionY = 0;
+            foreach (Line line in lines)
+            {
+                positionX += line.StartPoint.X;
+                positionX += line.EndPoint.X;
+                positionY += line.StartPoint.Y;
+                positionY += line.EndPoint.Y;
+
+            }
+            return new Point3d(positionX / (lines.Count*2), positionY / (lines.Count * 2), 0);
         }
+
+        public double getTurnAngle(int dirIndex)
+        {// returns positive if left and negativee for right
+            double turnAngle = angles[dirIndex] - startAngle;
+            if (turnAngle < -1 * Math.PI)
+                return turnAngle + 2*Math.PI;
+            else if (turnAngle > Math.PI)
+                return -1 * (2*Math.PI - turnAngle);
+
+            return turnAngle;
+        }
+
+
         public List<Line> lines = new List<Line>();
         public int height;
+        public string Type;
+        public double startAngle;
+        public List<double> angles = new List<double>();
     }
 
 
     // Derived class
     public class ArrowShape : Shape
     {
-        public int getDirection()
+        public int GetDirection()
         {
             return height;
         }
-        public Boolean isTurn()
+        public Boolean IsTurn()
         {
             return false;
         }
         public List<Line> headLines;
     }
-
 }
