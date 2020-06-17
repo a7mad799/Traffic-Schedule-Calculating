@@ -1,4 +1,4 @@
-﻿// (C) Copyright 2019 by  
+﻿// (C) Copyright 2020 by Ahmad Asela
 //
 using System;
 using System.Diagnostics;
@@ -10,6 +10,10 @@ using Autodesk.AutoCAD.EditorInput;
 using System.Collections.Generic;
 using Decider;
 using System.Linq;
+using Decider.Csp.Integer;
+using Decider.Csp.Global;
+using Decider.Csp.BaseTypes;
+using Autodesk.AutoCAD.Colors;
 
 // This line is not mandatory, but improves loading performances
 [assembly: CommandClass(typeof(AutoCAD_CSharp_plug_in1.MyCommands))]
@@ -66,6 +70,9 @@ namespace AutoCAD_CSharp_plug_in1
                    //                                    "\n\tFrom down to left: 25");
                 }
                 Transaction tr = db.TransactionManager.StartTransaction();
+                List<Curve> connectors = new List<Curve>();
+
+                List<VariableInteger> cases = new List<VariableInteger>();
                 using (tr)
                 {
                     bool firstline = true;
@@ -78,9 +85,9 @@ namespace AutoCAD_CSharp_plug_in1
 
                     foreach (SelectedObject so in psr.Value)
                     {
-                        
+
                         if (so.ObjectId.ObjectClass.IsDerivedFrom(lineClass))
-                        { 
+                        {
                             //this variable reads the selected objects then we choose the lines only for analyzing
                             Line line = (Line)tr.GetObject(so.ObjectId, OpenMode.ForRead);
                             line = (Line)tr.GetObject(so.ObjectId, OpenMode.ForWrite);
@@ -91,17 +98,17 @@ namespace AutoCAD_CSharp_plug_in1
                                 distance = line.StartPoint.X - prevLine.StartPoint.X;
                             }
                             //ed.WriteMessage("\nStartPoint: {0} \nEndPoint: {1}\nsteps: {2}", line.StartPoint, line.EndPoint, distance);
-                            prevLine = line ;
+                            prevLine = line;
                             firstline = false;
                         }
-                       
+
                     }
 
                     Line curr = new Line();
                     Line line1 = new Line();
                     Line line2 = new Line();
                     int i, foundLines, checkCount, nullCount = 0;
-                    for(int l = 0; l<myLines.Count ;l++)
+                    for (int l = 0; l < myLines.Count; l++)
                     {
                         if (myLines[l] != null)
                         {
@@ -126,7 +133,7 @@ namespace AutoCAD_CSharp_plug_in1
                                         checkCount = 0;
                                         foundLines++;
                                         curr.EndPoint = line2.EndPoint;
-                                        ed.WriteMessage(foundLines + "\t");
+                                        //ed.WriteMessage(foundLines + "\t");
                                         newShape.lines.Add(myLines[i]);
                                         myLines[i] = null;
                                         nullCount++;
@@ -137,7 +144,7 @@ namespace AutoCAD_CSharp_plug_in1
                                         checkCount = 0;
                                         foundLines++;
                                         curr.EndPoint = line2.StartPoint;
-                                        ed.WriteMessage(foundLines + "\t");
+                                        //ed.WriteMessage(foundLines + "\t");
                                         myLines[i].ReverseCurve();
                                         newShape.lines.Add(myLines[i]);
                                         myLines[i] = null;
@@ -147,7 +154,7 @@ namespace AutoCAD_CSharp_plug_in1
                                     if (foundLines == 100)
                                     {
                                         newShape = null;
-                                        ed.WriteMessage("\ninfinite loop");
+                                        //ed.WriteMessage("\ninfinite loop");
                                         break;
                                     }
                                 }
@@ -155,12 +162,12 @@ namespace AutoCAD_CSharp_plug_in1
                                 {
                                     newShape = null;
                                     checkCount = 0;
-                                    ed.WriteMessage("\ninfinite checks");
+                                    //ed.WriteMessage("\ninfinite checks");
                                     break;
                                 }
-                              
 
-                                
+
+
                                 //break;  
                                 i = (i + 1) % myLines.Count;
                             }
@@ -186,17 +193,17 @@ namespace AutoCAD_CSharp_plug_in1
                             double angle, len1, len2;
                             Line virtu = new Line();
 
-                            for (int l = 0; l <item.lines.Count; l++)
+                            for (int l = 0; l < item.lines.Count; l++)
                             {
 
-                                if (Math.Abs(item.lines[l].Angle - (item.lines[(l + 2) % item.lines.Count].Angle + Math.PI) % (Math.PI*2))<0.01 &&
-                                    Math.Abs(item.lines[l].Angle % Math.PI - (item.lines[(l + 1) % item.lines.Count].Angle + (Math.PI/2)) % Math.PI) < 0.01)
+                                if (Math.Abs(item.lines[l].Angle - (item.lines[(l + 2) % item.lines.Count].Angle + Math.PI) % (Math.PI * 2)) < 0.01 &&
+                                    Math.Abs(item.lines[l].Angle % Math.PI - (item.lines[(l + 1) % item.lines.Count].Angle + (Math.PI / 2)) % Math.PI) < 0.01)
                                 {
                                     item.startAngle = item.lines[(l + 2) % item.lines.Count].Angle;
-                                    ed.WriteMessage("\nstartAngle" + item.startAngle);
+                                    //ed.WriteMessage("\nstartAngle" + item.startAngle);
 
                                 }
-                                if (item.lines[l].Angle == item.lines[(l+3)% item.lines.Count].Angle)
+                                if (item.lines[l].Angle == item.lines[(l + 3) % item.lines.Count].Angle)
                                 {
                                     item.Type = "arrow";
                                     //item.lines[l].ColorIndex = 1;
@@ -214,7 +221,7 @@ namespace AutoCAD_CSharp_plug_in1
                                                               , item.lines[l].StartPoint.Y + Math.Sin(item.lines[l].Angle - Math.PI / 2) * 1, 0);
                                     len2 = virtu.Length;
                                     //virtu.ColorIndex = 2;
-                                    
+
 
                                     if (len1 < len2)// here we find the direction of each arrow
                                         angle = item.lines[l].Angle + Math.PI / 2;
@@ -228,9 +235,9 @@ namespace AutoCAD_CSharp_plug_in1
                                     */
 
                                     angle = angle % (Math.PI * 2);
-                                    item.angles.Add( (angle + Math.PI * 2) % (Math.PI * 2) );
+                                    item.angles.Add((angle + Math.PI * 2) % (Math.PI * 2));
                                     //item.lines[(l + 3) % item.lines.Count].ColorIndex = 1;
-                                    
+
                                 }
                             }
 
@@ -243,7 +250,7 @@ namespace AutoCAD_CSharp_plug_in1
                                 linew.ColorIndex = 2;// yellew color
 
                             }
-                            if(item.Type == "arrow")
+                            if (item.Type == "arrow")
                             {
                                 linew.ColorIndex = 1;// red Color
                             }
@@ -263,7 +270,10 @@ namespace AutoCAD_CSharp_plug_in1
                             arrowsList.Add(item);
                         }
                     }
+
                     double distnce;
+
+
                     for (int j = 0; j < arrowsList.Count; j++)
                     {
                         for (int d = 0; arrowsList[j] != null && d < arrowsList[j].angles.Count; d++)
@@ -301,7 +311,7 @@ namespace AutoCAD_CSharp_plug_in1
                                         min = pair.Value;
                                         secondArrow = pair.Key;
                                     }
-                                        
+
                                 }
                                 //secondArrow = dists.Aggregate((x, y) => x.Value < y.Value ? x : y).Key;
                                 connector.EndPoint = secondArrow.getPosition();// this is the route exit of the cross
@@ -329,10 +339,10 @@ namespace AutoCAD_CSharp_plug_in1
                                         yTemp = m0 * (xTemp - x0) + y0;
                                     else
                                         yTemp = y1;
-                            //        double xTemp = (connector.EndPoint.X * Math.Tan(secondArrow.startAngle) -
-                              //      connector.StartPoint.X * Math.Tan(arrowsList[j].startAngle) + connector.EndPoint.Y - connector.StartPoint.Y)
-                                //    / (Math.Tan(arrowsList[j].startAngle) - Math.Tan(secondArrow.startAngle));
-                                  //  double yTemp = Math.Tan(arrowsList[j].startAngle) * (xTemp - arrowsList[j].getPosition().X) + arrowsList[j].getPosition().Y;
+                                    //        double xTemp = (connector.EndPoint.X * Math.Tan(secondArrow.startAngle) -
+                                    //      connector.StartPoint.X * Math.Tan(arrowsList[j].startAngle) + connector.EndPoint.Y - connector.StartPoint.Y)
+                                    //    / (Math.Tan(arrowsList[j].startAngle) - Math.Tan(secondArrow.startAngle));
+                                    //  double yTemp = Math.Tan(arrowsList[j].startAngle) * (xTemp - arrowsList[j].getPosition().X) + arrowsList[j].getPosition().Y;
 
                                     //Point3d mid = new Point3d(connector.StartPoint.X, connector.EndPoint.Y, 0);
                                     Point3d mid = new Point3d(xTemp, yTemp, 0);
@@ -342,6 +352,8 @@ namespace AutoCAD_CSharp_plug_in1
                                     pntSet.Add(connector.EndPoint);
                                     //PolylineCurve3d leftTurn = new PolylineCurve3d(pntSet);
                                     Polyline3d leftTurn = new Polyline3d(Poly3dType.CubicSplinePoly, pntSet, false);
+                                    connectors.Add(leftTurn);
+                                    //leftTurn.GetGeCurve().GetDistanceTo(connector.GetGeCurve());
                                     //leftTurn.
                                     leftTurn.ColorIndex = 4;
                                     btr.AppendEntity(leftTurn); //drawing the left turns routes
@@ -349,6 +361,7 @@ namespace AutoCAD_CSharp_plug_in1
                                 }
                                 else
                                 {
+                                    connectors.Add(connector);
                                     btr.AppendEntity(connector); // drawing the straight routes
                                     tr.AddNewlyCreatedDBObject(connector, true);
                                 }
@@ -356,12 +369,128 @@ namespace AutoCAD_CSharp_plug_in1
                                     arrowsList[j] = null;
                             }
                         }
-                        
+
                     }
-                  
+
+                    var constraints = new List<IConstraint>();
+                    for (int i1 = 0; i1 < connectors.Count; i1++)
+                    {
+                        cases.Add(new VariableInteger("" + i1, 0, 5));
+                    }
+
+                    for (int i1 = 0; i1 < connectors.Count; i1++)
+                    {
+                        for (int j1 = i1 + 1; j1 < connectors.Count; j1++)
+                        {
+                            //ed.WriteMessage("\t" + connectors[i1].GetGeCurve().GetDistanceTo(connectors[j1].GetGeCurve()));
+                            if (connectors[i1].StartPoint != connectors[j1].StartPoint
+                                && connectors[i1].GetGeCurve().GetDistanceTo(connectors[j1].GetGeCurve()) < 3)
+                            {
+                                constraints.Add(new ConstraintInteger(cases[i1] != cases[j1]));
+                            }
+                            else if (connectors[i1].StartPoint == connectors[j1].StartPoint)
+                            {
+                                constraints.Add(new ConstraintInteger(cases[i1] == cases[j1]));
+                            }
+
+                        }
+                    }
 
 
-                    //ed.WriteMessage("\n" + arrowsLines.Count);
+                    IState<int> state = new StateInteger(cases, constraints);
+                    state.StartSearch(out StateOperationResult searchResult);
+
+                    ed.WriteMessage("\n");
+                    foreach (VariableInteger aa in cases)
+                    {
+
+
+
+                    }
+                    db.TransactionManager.QueueForGraphicsFlush();
+                    /*    
+                        tr.Commit();
+                    }
+                    tr = db.TransactionManager.StartTransaction();
+                    using (tr)
+                    {
+                        tr.GetObject(connectors[i1].Id, OpenMode.ForRead);
+                        tr.GetObject(connectors[i1].Id, OpenMode.ForWrite);
+                    */
+
+                    for (int i1 = 0; i1 < connectors.Count; i1++)
+                    {
+
+                        connectors[i1].ColorIndex = 3 + cases[i1].Value;
+                    }
+                    db.TransactionManager.QueueForGraphicsFlush();
+
+                    PromptDoubleOptions loadOptions = new PromptDoubleOptions("");
+                    loadOptions.DefaultValue = 1;
+                    loadOptions.AllowNegative = false;
+                    loadOptions.AllowZero = false;
+
+
+
+                    ed.WriteMessage("\nPlease enter the total load ");
+                    List<int> distinctCases = new List<int>();
+                    foreach (VariableInteger _case in cases)
+                    {
+                        distinctCases.Add(_case.Value);
+                    }
+                    distinctCases = distinctCases.Distinct().ToList();
+                    distinctCases.Sort();
+                    List<double> loads = new List<double>();
+                    foreach (int _case in distinctCases)
+                    {
+                        loadOptions.Message = "for " + Color.FromColorIndex(ColorMethod.ByColor, (short)(_case + 3)).ColorNameForDisplay + "\n";
+                        loads.Add(ed.GetDouble(loadOptions).Value);
+                        //var a = Color.FromColorIndex(ColorMethod.ByAci, (short)(_case.Value + 3)).ColorName;
+                    }
+
+                    double load = 5;
+
+                    ed.WriteMessage("We found " + distinctCases.Count + " phases:-\n");
+                    int caseCapacity;
+                    List<double> caseLengthAvg = new List<double>();
+                    List<int> caseGreenTime = new List<int>(); // seconds
+
+                    foreach (int _case in distinctCases)
+                    {// loadAvg * lengthAvg / 10
+
+                        caseCapacity = 0;
+                        caseLengthAvg.Add(0);
+                        foreach (Curve connector in connectors)
+                        {
+                            if(connector.ColorIndex == 3 + _case)
+                            {
+                                caseCapacity++;
+                                caseLengthAvg[_case] += connector.GetDistanceAtParameter(connector.EndParam - connector.StartParam);
+                                //int w = 0;
+                            }
+                        }
+                        caseLengthAvg[_case] /= caseCapacity;
+                        loads[_case] /= caseCapacity;
+                        caseGreenTime.Add((int) (caseLengthAvg[_case] * loads[_case] / 10));
+
+                    }
+                    double ratio = (double)120/(caseGreenTime.Sum() - caseGreenTime.Min()); // in order to resrict waiting time from being more than 120
+                    if (ratio < 1)
+                    {
+                        foreach (int _case in distinctCases)
+                        {
+                            caseGreenTime[_case] = (int)(caseGreenTime[_case] * ratio);
+                        }
+                    }
+                    int w = 5;
+
+                    foreach (int _case in distinctCases)
+                    {
+                        ed.WriteMessage("for " + Color.FromColorIndex(ColorMethod.ByColor, (short)(_case + 3)).ColorNameForDisplay +
+                                                                "color we need: " + caseGreenTime[_case] + " seconds\n");
+                    }
+
+
                     tr.Commit();
                 }
                 // There are selected entities
