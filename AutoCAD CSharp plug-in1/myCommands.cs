@@ -14,6 +14,11 @@ using Decider.Csp.Integer;
 using Decider.Csp.Global;
 using Decider.Csp.BaseTypes;
 using Autodesk.AutoCAD.Colors;
+using Autodesk.AutoCAD.Windows;
+using System.IO;
+using System.Text.RegularExpressions;
+using System.Collections;
+
 
 // This line is not mandatory, but improves loading performances
 [assembly: CommandClass(typeof(AutoCAD_CSharp_plug_in1.MyCommands))]
@@ -37,20 +42,379 @@ namespace AutoCAD_CSharp_plug_in1
         // context menu.
 
         // Modal Command with localized name
-        [CommandMethod("MyGroup", "MyCommand", "MyCommandLocal", CommandFlags.Modal)]
-        public void MyCommand() // This method can have any name
+        [CommandMethod("MyGroup", "CalculateLoad", "CalculateLoadLocal", CommandFlags.Modal)]
+        public void CalculateLoad() // This method can have any name
         {
             // Put your command code here
             Document doc = Application.DocumentManager.MdiActiveDocument;
+            Database db = doc.Database;
             Editor ed;
             if (doc != null)
             {
                 ed = doc.Editor;
-                
-                Debug.WriteLine("myCommand called");
+                OpenFileDialog ofd =
+                new OpenFileDialog("Select data file to calculate schedule", null, "xml", "DataFileToCalculate",
+                                     OpenFileDialog.OpenFileDialogFlags.DoNotTransferRemoteFiles);
 
+                System.Windows.Forms.DialogResult dr = ofd.ShowDialog();
+                if (dr != System.Windows.Forms.DialogResult.OK)
+                    return;
+
+                string[] lines = File.ReadAllLines(ofd.Filename);
+
+                bool routesReading = false;
+                bool pedesRoutesReading = false;
+                string pattern = @"\d+(\.\d+)?,\d+(\.\d+)?(,\d+(\.\d+)?)?";
+                Regex rgx = new Regex(pattern);
+                MatchCollection matches;
+                ArrayList pedesConnectors = new ArrayList();
+                List<Curve> connectors = new List<Curve>();
+                List<int> loadForConnectors = new List<int>();
+                List<int> timeForPedes = new List<int>();
+                List<Point3dCollection> curvesPointsColl = new List<Point3dCollection>();
+
+
+                foreach (string line in lines)
+                {
+                    if (line == "<routes>")
+                        routesReading = true;
+                    else if (line == "</routes>")
+                        routesReading = false;
+                    else if (line == "<pedestrain_routes>")
+                        pedesRoutesReading = true;
+                    else if (line == "</pedestrain_routes>")
+                        pedesRoutesReading = false;
+
+                    else if (routesReading)
+                    {
+                        matches = rgx.Matches(line);
+                        if (matches.Count > 0)
+                        {
+                            if (matches.Count == 3)
+                            {
+                                string[] coords = matches[0].Value.Split(',');
+
+                                Point3d point1 = new Point3d(double.Parse(coords[0]), double.Parse(coords[1]), 0);
+                                coords = matches[1].Value.Split(',');
+                                Point3d point2 = new Point3d(double.Parse(coords[0]), double.Parse(coords[1]), 0);
+                                coords = matches[2].Value.Split(',');
+
+                                Line connector = new Line(point1, point2);
+                                loadForConnectors.Add(int.Parse(coords[0]));
+                                connector.ColorIndex = int.Parse(coords[1]) + 3;
+                                connectors.Add(connector);
+                            }
+
+                            else if (matches.Count == 4)
+                            {
+                                Point3dCollection pntSet = new Point3dCollection();
+                                string[] coords = matches[0].Value.Split(',');
+                                pntSet.Add(new Point3d(double.Parse(coords[0]), double.Parse(coords[1]), 0));
+                                coords = matches[1].Value.Split(',');
+                                pntSet.Add(new Point3d(double.Parse(coords[0]), double.Parse(coords[1]), 0));
+                                coords = matches[2].Value.Split(',');
+                                pntSet.Add(new Point3d(double.Parse(coords[0]), double.Parse(coords[1]), 0));
+                                coords = matches[3].Value.Split(',');
+
+                                //PolylineCurve3d leftTurn = new PolylineCurve3d(pntSet);
+                                Polyline3d turn = new Polyline3d(Poly3dType.CubicSplinePoly, pntSet, false);
+                                loadForConnectors.Add(int.Parse(coords[0]));
+                                turn.ColorIndex = int.Parse(coords[1]) + 3;
+                                connectors.Add(turn);
+                                curvesPointsColl.Add(pntSet);
+                            }
+                            
+                            }
+                        }
+                    else if (pedesRoutesReading)
+                    {
+                        matches = rgx.Matches(line);
+                        if (matches.Count > 0)
+                        {
+                            if (matches.Count == 3)
+                            {
+                                string[] coords = matches[0].Value.Split(',');
+
+                                Point3d point1 = new Point3d(double.Parse(coords[0]), double.Parse(coords[1]), 0);
+                                coords = matches[1].Value.Split(',');
+                                Point3d point2 = new Point3d(double.Parse(coords[0]), double.Parse(coords[1]), 0);
+                                coords = matches[2].Value.Split(',');
+
+                                Line connector = new Line(point1, point2);
+                                timeForPedes.Add(int.Parse(coords[0]));
+                                connector.ColorIndex = int.Parse(coords[1]) + 3;
+                                List<Line> collection = new List<Line>();
+                                collection.Add(connector);
+                                pedesConnectors.Add(collection);
+                            }
+
+
+
+                            else
+                            {
+                                ed.WriteMessage("the data file is written wrongly\n");
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                Transaction tr = db.TransactionManager.StartTransaction();
+
+                string routesToWrite = "<routes>\n";
+                string pedesRoutesToWrite = "<pedestrain_routes>\n";
+
+                List<VariableInteger> cases = new List<VariableInteger>();
+                using (tr)
+                {
+                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
+                    BlockTableRecord btr = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+
+                    foreach (Curve connector in connectors)
+                    {
+                        btr.AppendEntity(connector); // drawing the straight routes
+                        tr.AddNewlyCreatedDBObject(connector, true);
+                    }
+                    foreach(List<Line> pedesCol in pedesConnectors)
+                    {
+                        btr.AppendEntity(pedesCol[0]); // drawing the straight routes
+                        tr.AddNewlyCreatedDBObject(pedesCol[0], true);
+                    }
+                    //ed.WriteMessage("\nFile selected was \"{0}\".", ofd.Filename);
+
+                    var constraints = new List<IConstraint>();
+                    for (int i1 = 0; i1 < connectors.Count + pedesConnectors.Count; i1++)
+                    {
+                        cases.Add(new VariableInteger("" + i1, 0, 10));
+                    }
+
+                    for (int i1 = 0; i1 < connectors.Count; i1++)
+                    {
+                        for (int j1 = i1 + 1; j1 < connectors.Count; j1++)
+                        {
+                            //ed.WriteMessage("\t" + connectors[i1].GetGeCurve().GetDistanceTo(connectors[j1].GetGeCurve()));
+
+                            if (connectors[i1].StartPoint != connectors[j1].StartPoint
+                                && connectors[i1].GetGeCurve().GetDistanceTo(connectors[j1].GetGeCurve()) < 3)
+                            {
+                                //return;
+                                constraints.Add(new ConstraintInteger(cases[i1] != cases[j1]));
+                            }
+                            else if (connectors[i1].StartPoint == connectors[j1].StartPoint)
+                            {
+                                constraints.Add(new ConstraintInteger(cases[i1] == cases[j1]));
+                            }
+
+                        }
+
+                        for (int i2 = 0; i2 < pedesConnectors.Count; i2++)
+                        {
+                            List<Line> temp = (List<Line>)(pedesConnectors[i2]);
+                            Line connector = temp[0];
+                            if (connectors[i1].GetGeCurve().GetDistanceTo(connector.GetGeCurve()) < 3)
+                                constraints.Add(new ConstraintInteger(cases[i1] != cases[i2 + connectors.Count]));
+                        }
+                    }
+
+
+                    IState<int> state = new StateInteger(cases, constraints);
+                    state.StartSearch(out StateOperationResult searchResult);
+
+                    ed.WriteMessage("\nhello");
+
+                    db.TransactionManager.QueueForGraphicsFlush();
+
+
+                    List<int> distinctCases = new List<int>();
+                    foreach (VariableInteger _case in cases)
+                    {
+                        distinctCases.Add(_case.Value);
+                    }
+                    distinctCases = distinctCases.Distinct().ToList();
+                    distinctCases.Sort();
+
+
+
+                    for (int i1 = 0; i1 < connectors.Count; i1++)
+                    {
+
+                        connectors[i1].ColorIndex = 3 + cases[i1].Value;
+                    }
+
+                    for (int i1 = 0; i1 < pedesConnectors.Count; i1++)
+                    {
+                        List<Line> temp = (List<Line>)(pedesConnectors[i1]);
+
+                        temp[0].ColorIndex = 3 + cases[i1 + connectors.Count].Value;
+                    }
+                    foreach (List<Line> pedesCol in pedesConnectors)
+                    {
+                        Line pedes = pedesCol[0];
+                        List<bool> availableCases = new List<bool>();
+                        for (int i1 = 0; i1 < distinctCases.Count; i1++)
+                        {
+                            availableCases.Add(true);
+                        }
+
+                        bool free = true;
+                        for (int i2 = 0; i2 < connectors.Count; i2++)
+                        {
+                            Curve connector = connectors[i2];
+                            if (pedes.GetGeCurve().GetDistanceTo(connector.GetGeCurve()) < 3)
+                            {
+                                availableCases[connector.ColorIndex - 3] = false;
+                                free = false;
+                            }
+                        }
+                        Line current = pedes;
+                        for (int i2 = 0; i2 < availableCases.Count; i2++)
+                            if (availableCases[i2] && pedes.ColorIndex != 3 + i2 && !free)
+                            {
+                                Point3d additionStart = new Point3d(pedes.StartPoint.X + i2 * Math.Cos(pedes.Angle),
+                                                                pedes.StartPoint.Y + i2 * Math.Sin(pedes.Angle), 0);
+                                Point3d additionEnd = new Point3d(pedes.EndPoint.X + i2 * Math.Cos(pedes.Angle),
+                                                                    pedes.EndPoint.Y + i2 * Math.Sin(pedes.Angle), 0);
+                                DBObjectCollection acDbObjColl = current.GetOffsetCurves(0.5);
+                                Line available = (Line)acDbObjColl[0];
+                                current = available;
+                                available.ColorIndex = 3 + i2;
+                                pedesCol.Add(available);
+                                btr.AppendEntity(available); // drawing the straight routes
+                                tr.AddNewlyCreatedDBObject(available, true);
+                            }
+                    }
+
+                    db.TransactionManager.QueueForGraphicsFlush();
+                    List<int> loads = new List<int>();
+
+                        for (int i1 = 0; i1 < distinctCases.Count; i1++)
+                        {
+                            int totalLoad = 0;
+                            for (int i = 0; i < connectors.Count; i++)
+                            {
+                                Curve connector = (Curve)connectors[i];
+                                if (connector.ColorIndex == i1 + 3)
+                                    totalLoad += loadForConnectors[i];
+                            }
+                            loads.Add(totalLoad);
+                        }
+
+
+                        ed.WriteMessage("We found " + distinctCases.Count + " phases:-\n");
+                        int caseCapacity;
+                        List<double> caseLengthAvg = new List<double>();
+                        List<int> caseGreenTime = new List<int>(); // seconds
+
+                        foreach (int _case in distinctCases)
+                        {// loadAvg * lengthAvg / 10
+
+                            caseCapacity = 0;
+                            caseLengthAvg.Add(0);
+                            foreach (Curve connector in connectors)
+                            {
+                                if (connector.ColorIndex == 3 + _case)
+                                {
+                                    caseCapacity++;
+                                    caseLengthAvg[_case] += connector.GetDistanceAtParameter(connector.EndParam - connector.StartParam);
+                                    //int w = 0;
+                                }
+
+                            }
+                            caseLengthAvg[_case] /= caseCapacity;
+                            loads[_case] /= caseCapacity;
+                            caseGreenTime.Add((int)(caseLengthAvg[_case] * loads[_case] / 40) + 5);
+
+                        }
+
+                        ed.WriteMessage("\nPlease enter the needed time ");
+                        for (int i = 0; i < pedesConnectors.Count; i++)
+                        {
+                            List<Line> pedesCol1 = (List<Line>)pedesConnectors[i];
+                            int t = timeForPedes[i];
+                            int totalTime = 0;
+                            foreach (Line pedes1 in pedesCol1)
+                            {
+                                totalTime += caseGreenTime[pedes1.ColorIndex - 3];
+                            }
+                            if (t > totalTime)
+                            {
+                                foreach (Line pedes1 in pedesCol1)
+                                {
+                                    caseGreenTime[pedes1.ColorIndex - 3] += (t - totalTime) / pedesCol1.Count;
+                                }
+                            }
+                            //var a = Color.FromColorIndex(ColorMethod.ByAci, (short)(_case.Value + 3)).ColorName;
+                        }
+                        if (caseGreenTime.Count > 0)
+                        {
+                            double ratio = (double)120 / (caseGreenTime.Sum() - caseGreenTime.Min()); // in order to resrict waiting time from being more than 120
+                            if (ratio < 1)
+                            {
+                                foreach (int _case in distinctCases)
+                                {
+                                    caseGreenTime[_case] = (int)(caseGreenTime[_case] * ratio);
+                                }
+                            }
+                        }
+                        int j2 = 0;
+                        foreach (Curve connector in connectors)
+                        {
+                            var connectorType = connector.GetType();
+                            if (connectorType.Name == "Line")
+                            {
+                                routesToWrite = routesToWrite + "\t<route>" + connector.StartPoint + ", " + connector.EndPoint + ", " +
+                                    loads[connector.ColorIndex - 3] + "," + (connector.ColorIndex - 3) + " </route>\n";
+                            }
+                            else
+                            {
+                                routesToWrite = routesToWrite + "\t<route>" + curvesPointsColl[j2][0] + ", " + curvesPointsColl[j2][1] + ", "
+                                    + curvesPointsColl[j2][2] + ", " + loads[connector.ColorIndex - 3] + "," + (connector.ColorIndex - 3) + " </route>\n";
+                                j2++;
+                            }
+                        }
+                        routesToWrite = routesToWrite + "</routes>\n";
+
+                        foreach (List<Line> pedesCol1 in pedesConnectors)
+                        {
+                            pedesRoutesToWrite = pedesRoutesToWrite + "\t<route>" + pedesCol1[0].StartPoint + ", " + pedesCol1[0].EndPoint + ", " +
+                                    caseGreenTime[pedesCol1[0].ColorIndex - 3] + "," + (pedesCol1[0].ColorIndex - 3) + " </route>\n";
+                        }
+
+                        pedesRoutesToWrite = pedesRoutesToWrite + "</pedestrain_routes>\n";
+
+                        foreach (int _case in distinctCases)
+                        {
+                            ed.WriteMessage("for the " + Color.FromColorIndex(ColorMethod.ByColor, (short)(_case + 3)).ColorNameForDisplay +
+                                                                    " routes we need: " + caseGreenTime[_case] + " seconds\n");
+                        }
+
+                        PromptKeywordOptions KeyOptions = new PromptKeywordOptions("")
+                        {
+                            Message = "Would you like to export the data? \n",
+                            AllowNone = false
+                        };
+                        KeyOptions.Keywords.Add("Yes");
+                        KeyOptions.Keywords.Add("No");
+                        PromptResult KeyRes = ed.GetKeywords(KeyOptions);
+                        if (KeyRes.StringResult == "Yes")
+                        {
+                            SaveFileDialog sfd = new SaveFileDialog("Save schedule calculating data file results", null, "xml", "DataFileToCalculate",
+                                            SaveFileDialog.SaveFileDialogFlags.DoNotTransferRemoteFiles);
+
+                            if (sfd.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+                            {
+                                File.WriteAllText(sfd.Filename, routesToWrite + "\n" + pedesRoutesToWrite);
+                            }
+
+                        }
+                    
+                    tr.Commit();
+                }
+
+                
             }
         }
+
 
         // Modal Command with pickfirst selection
         [CommandMethod("MyGroup", "CalculateSchedule", "MyPickFirstLocal", CommandFlags.Modal | CommandFlags.UsePickSet)]
@@ -69,8 +433,13 @@ namespace AutoCAD_CSharp_plug_in1
                    //                                    "\n\tFrom right to down: 20 second" +
                    //                                    "\n\tFrom down to left: 25");
                 }
-                Transaction tr = db.TransactionManager.StartTransaction();
                 List<Curve> connectors = new List<Curve>();
+                List<Point3dCollection> curvesPointsColl = new List<Point3dCollection>();
+
+                Transaction tr = db.TransactionManager.StartTransaction();
+                ArrayList pedesConnectors = new ArrayList();
+                string routesToWrite = "<routes>\n";
+                string pedesRoutesToWrite = "<pedestrain_routes>\n";
 
                 List<VariableInteger> cases = new List<VariableInteger>();
                 using (tr)
@@ -263,15 +632,80 @@ namespace AutoCAD_CSharp_plug_in1
                     }
 
                     List<Shape> arrowsList = new List<Shape>();
+                    List<Shape> pedisList = new List<Shape>();
                     foreach (Shape item in shapes)
                     {
+                        if (item.Type == "pedestrian")
+                        {
+                            pedisList.Add(item);
+                        }
                         if (item.Type == "arrow")
                         {
                             arrowsList.Add(item);
                         }
                     }
-
+                    //pedisList = pedisList.OrderBy(item => item.getPosition().X).ToList();
+                    //pedisList = pedisList.OrderBy(item => item.getPosition().Y).ToList();
                     double distnce;
+
+                    for (int j = 0; j < pedisList.Count; j++)
+                    {
+                        Line virtu = new Line();
+                        if (pedisList[j] == null)
+                            continue;
+                        virtu.StartPoint = pedisList[j].getPosition();
+                        virtu.EndPoint = pedisList[j].getPosition();
+
+                        Shape currShape = pedisList[j];
+                        for (int k = j+1; k < pedisList.Count; k++)
+                        {
+                            if (pedisList[k] == null)
+                                continue;
+                            if (Math.Abs(currShape.lines[0].Length + currShape.lines[1].Length +
+                                currShape.lines[2].Length + currShape.lines[3].Length -
+                                (pedisList[k].lines[0].Length + pedisList[k].lines[1].Length +
+                                pedisList[k].lines[2].Length + pedisList[k].lines[3].Length)) <  0.1 && Math.Abs(pedisList[k].lines[0].Length - pedisList[k].lines[1].Length) > 1 &&
+                                currShape.getPosition().DistanceTo(pedisList[k].getPosition()) < pedisList[j].lines.Min(line=>line.Length)*3.5)
+                            {
+                                currShape = pedisList[k];
+                                if(virtu.StartPoint.DistanceTo(currShape.getPosition()) > virtu.Length)
+                                    virtu.EndPoint = currShape.getPosition();
+                                pedisList[k] = null;
+                                k = j;
+
+                            }
+                        }
+                        currShape = pedisList[j];
+                        for (int k = j + 1; k < pedisList.Count; k++)
+                        {
+                            if (pedisList[k] == null)
+                                continue;
+                            if (Math.Abs(currShape.lines[0].Length + currShape.lines[1].Length +
+                                currShape.lines[2].Length + currShape.lines[3].Length -
+                                (pedisList[k].lines[0].Length + pedisList[k].lines[1].Length +
+                                pedisList[k].lines[2].Length + pedisList[k].lines[3].Length)) < 0.1 && Math.Abs(pedisList[k].lines[0].Length - pedisList[k].lines[1].Length) > 1 &&
+                                currShape.getPosition().DistanceTo(pedisList[k].getPosition()) < pedisList[j].lines.Min(line => line.Length) * 3.5)
+                            {
+                                currShape = pedisList[k];
+                                if (virtu.EndPoint.DistanceTo(currShape.getPosition()) > virtu.Length)
+                                    virtu.StartPoint = currShape.getPosition();
+                                pedisList[k] = null;
+                                k = j;
+
+                            }
+                        }
+
+                        if (virtu.EndPoint != virtu.StartPoint)
+                        {
+                            virtu.ColorIndex = 4;
+                            btr.AppendEntity(virtu); //drawing the left turns routes
+                            tr.AddNewlyCreatedDBObject(virtu, true);
+                            List<Line> pedesCollection = new List<Line>();
+                            pedesCollection.Add(virtu);
+                            pedesConnectors.Add(pedesCollection);
+                        }
+                    }
+                  
 
 
                     for (int j = 0; j < arrowsList.Count; j++)
@@ -285,7 +719,7 @@ namespace AutoCAD_CSharp_plug_in1
                                 continue;//ignore right turns
                             var dists = new Dictionary<Shape, double>();
                             Line connector = new Line();
-                            Shape secondArrow = new Shape();
+                            Shape secondArrow = arrowsList[j];
                             connector.StartPoint = arrowsList[j].getPosition();// this is the the entrance
                             for (int k = 0; k < arrowsList.Count && arrowsList[j] != null; k++)
                             {
@@ -294,7 +728,7 @@ namespace AutoCAD_CSharp_plug_in1
 
                                 connector.EndPoint = arrowsList[k].getPosition();
                                 distnce = arrowsList[j].getPosition().DistanceTo(arrowsList[k].getPosition());
-                                if (arrowsList[j].angles[d] == arrowsList[k].angles[0] && distnce > 10)
+                                if (arrowsList[j].angles[d] == arrowsList[k].angles[0] && distnce > 10 && arrowsList[k].getTurnAngle(0) < 0.01)
                                 {
                                     if (Math.Abs(arrowsList[j].angles[d] - connector.Angle) < Math.PI / 2
                                         || Math.Abs(arrowsList[j].angles[d] - connector.Angle) > 3 * Math.PI / 2)
@@ -303,16 +737,25 @@ namespace AutoCAD_CSharp_plug_in1
                             }
                             if (dists.Count > 0)
                             {
+
+                                
+                                
                                 double min = 999999;
                                 foreach (KeyValuePair<Shape, double> pair in dists)
                                 {
-                                    if (pair.Value < min)
+                                    if (arrowsList[j].getTurnAngle(d) > 0.01)
+                                    {
+
+                                    }
+                                    if (pair.Value < min)// && !pair.Key.isVisitedBy(arrowsList[j],d))
                                     {
                                         min = pair.Value;
                                         secondArrow = pair.Key;
+                                     //   secondArrow.visitedBy.Add(arrowsList[j].getTurnAngle(d));
                                     }
 
                                 }
+                                
                                 //secondArrow = dists.Aggregate((x, y) => x.Value < y.Value ? x : y).Key;
                                 connector.EndPoint = secondArrow.getPosition();// this is the route exit of the cross
                                 connector.ColorIndex = 4;
@@ -346,13 +789,18 @@ namespace AutoCAD_CSharp_plug_in1
 
                                     //Point3d mid = new Point3d(connector.StartPoint.X, connector.EndPoint.Y, 0);
                                     Point3d mid = new Point3d(xTemp, yTemp, 0);
-                                    Point3dCollection pntSet = new Point3dCollection();
-                                    pntSet.Add(connector.StartPoint);
-                                    pntSet.Add(mid);
-                                    pntSet.Add(connector.EndPoint);
+                                    Point3dCollection pntSet = new Point3dCollection
+                                    {
+                                        connector.StartPoint,
+                                        mid,
+                                        connector.EndPoint
+                                    };
                                     //PolylineCurve3d leftTurn = new PolylineCurve3d(pntSet);
                                     Polyline3d leftTurn = new Polyline3d(Poly3dType.CubicSplinePoly, pntSet, false);
                                     connectors.Add(leftTurn);
+                                    curvesPointsColl.Add(pntSet);
+                                    
+
                                     //leftTurn.GetGeCurve().GetDistanceTo(connector.GetGeCurve());
                                     //leftTurn.
                                     leftTurn.ColorIndex = 4;
@@ -373,9 +821,9 @@ namespace AutoCAD_CSharp_plug_in1
                     }
 
                     var constraints = new List<IConstraint>();
-                    for (int i1 = 0; i1 < connectors.Count; i1++)
+                    for (int i1 = 0; i1 < connectors.Count + pedesConnectors.Count; i1++)
                     {
-                        cases.Add(new VariableInteger("" + i1, 0, 5));
+                        cases.Add(new VariableInteger("" + i1, 0, 10));
                     }
 
                     for (int i1 = 0; i1 < connectors.Count; i1++)
@@ -383,9 +831,11 @@ namespace AutoCAD_CSharp_plug_in1
                         for (int j1 = i1 + 1; j1 < connectors.Count; j1++)
                         {
                             //ed.WriteMessage("\t" + connectors[i1].GetGeCurve().GetDistanceTo(connectors[j1].GetGeCurve()));
+                            
                             if (connectors[i1].StartPoint != connectors[j1].StartPoint
                                 && connectors[i1].GetGeCurve().GetDistanceTo(connectors[j1].GetGeCurve()) < 3)
                             {
+                                //return;
                                 constraints.Add(new ConstraintInteger(cases[i1] != cases[j1]));
                             }
                             else if (connectors[i1].StartPoint == connectors[j1].StartPoint)
@@ -393,6 +843,14 @@ namespace AutoCAD_CSharp_plug_in1
                                 constraints.Add(new ConstraintInteger(cases[i1] == cases[j1]));
                             }
 
+                        }
+
+                        for (int i2 = 0; i2 < pedesConnectors.Count; i2++)
+                        {
+                            List<Line> temp = (List<Line>)(pedesConnectors[i2]);
+                            Line connector = temp[0];
+                            if (connectors[i1].GetGeCurve().GetDistanceTo(connector.GetGeCurve()) < 3)
+                                constraints.Add(new ConstraintInteger(cases[i1] != cases[i2 + connectors.Count]));
                         }
                     }
 
@@ -418,21 +876,6 @@ namespace AutoCAD_CSharp_plug_in1
                         tr.GetObject(connectors[i1].Id, OpenMode.ForWrite);
                     */
 
-                    for (int i1 = 0; i1 < connectors.Count; i1++)
-                    {
-
-                        connectors[i1].ColorIndex = 3 + cases[i1].Value;
-                    }
-                    db.TransactionManager.QueueForGraphicsFlush();
-
-                    PromptDoubleOptions loadOptions = new PromptDoubleOptions("");
-                    loadOptions.DefaultValue = 1;
-                    loadOptions.AllowNegative = false;
-                    loadOptions.AllowZero = false;
-
-
-
-                    ed.WriteMessage("\nPlease enter the total load ");
                     List<int> distinctCases = new List<int>();
                     foreach (VariableInteger _case in cases)
                     {
@@ -440,6 +883,90 @@ namespace AutoCAD_CSharp_plug_in1
                     }
                     distinctCases = distinctCases.Distinct().ToList();
                     distinctCases.Sort();
+
+                    
+
+                    for (int i1 = 0; i1 < connectors.Count; i1++)
+                    {
+
+                        connectors[i1].ColorIndex = 3 + cases[i1].Value;
+                    }
+
+                    for (int i1 = 0; i1 < pedesConnectors.Count; i1++)
+                    {
+                        List<Line> temp = (List<Line>)(pedesConnectors[i1]);
+
+                        temp[0].ColorIndex = 3 + cases[i1 + connectors.Count].Value;
+                    }
+                    List<int> toRemove = new List<int>();
+                    foreach(List<Line> pedesCol in pedesConnectors)
+                    {
+                        Line pedes = pedesCol[0];
+                        List<bool> availableCases = new List<bool>();
+                        for (int i1 = 0; i1 < distinctCases.Count; i1++)
+                        {
+                            availableCases.Add(true);
+                        }
+
+                        bool free = true;
+                        for (int i2 = 0; i2 < connectors.Count; i2++)
+                        {
+                            Curve connector = connectors[i2];
+                            if (pedes.GetGeCurve().GetDistanceTo(connector.GetGeCurve()) < 3)
+                            {
+                                availableCases[connector.ColorIndex - 3] = false;
+                                free = false;
+                            }
+                        }
+                        Line current = pedes;
+                        for (int i2 = 0; i2 < availableCases.Count; i2++)
+                            if (availableCases[i2] && pedes.ColorIndex != 3+i2 && !free)
+                            {
+                                Point3d additionStart = new Point3d(pedes.StartPoint.X + i2* Math.Cos(pedes.Angle),
+                                                                pedes.StartPoint.Y +  i2 * Math.Sin(pedes.Angle), 0);
+                                Point3d additionEnd = new Point3d(pedes.EndPoint.X + i2 * Math.Cos(pedes.Angle),
+                                                                    pedes.EndPoint.Y + i2 * Math.Sin(pedes.Angle), 0);
+                                DBObjectCollection acDbObjColl = current.GetOffsetCurves(0.5);
+                                Line available = (Line)acDbObjColl[0];
+                                current = available;
+                                available.ColorIndex = 3 + i2;
+                                pedesCol.Add(available);
+                                btr.AppendEntity(available); // drawing the straight routes
+                                tr.AddNewlyCreatedDBObject(available, true);
+                            }
+
+                        if (free)
+                        {
+                            pedes.Erase(true);
+                            int i1;
+                            for (i1 = 0; i1 < pedesConnectors.Count; i1++)
+                            {
+                                List<Line> forRemove = (List<Line>)pedesConnectors[i1];
+                                if (forRemove[0] == pedes)
+                                {
+                                    toRemove.Add(i1);
+                                    break;
+                                }
+                            }
+                            
+                        }
+                    }
+                    for(int i3 = toRemove.Count - 1;i3 >=0;i3--)
+                    {
+                        pedesConnectors.RemoveAt(toRemove[i3]);
+                    }
+
+                    db.TransactionManager.QueueForGraphicsFlush();
+
+                    PromptDoubleOptions loadOptions = new PromptDoubleOptions("")
+                    {
+                        DefaultValue = 1,
+                        AllowNegative = false,
+                        AllowZero = false
+                    };
+
+                    ed.WriteMessage("\nPlease enter the total load ");
+                    
                     List<double> loads = new List<double>();
                     foreach (int _case in distinctCases)
                     {
@@ -447,8 +974,6 @@ namespace AutoCAD_CSharp_plug_in1
                         loads.Add(ed.GetDouble(loadOptions).Value);
                         //var a = Color.FromColorIndex(ColorMethod.ByAci, (short)(_case.Value + 3)).ColorName;
                     }
-
-                    double load = 5;
 
                     ed.WriteMessage("We found " + distinctCases.Count + " phases:-\n");
                     int caseCapacity;
@@ -468,29 +993,100 @@ namespace AutoCAD_CSharp_plug_in1
                                 caseLengthAvg[_case] += connector.GetDistanceAtParameter(connector.EndParam - connector.StartParam);
                                 //int w = 0;
                             }
+                            
                         }
                         caseLengthAvg[_case] /= caseCapacity;
                         loads[_case] /= caseCapacity;
-                        caseGreenTime.Add((int) (caseLengthAvg[_case] * loads[_case] / 10));
+                        caseGreenTime.Add((int) (caseLengthAvg[_case] * loads[_case] / 40)+5);
 
                     }
-                    double ratio = (double)120/(caseGreenTime.Sum() - caseGreenTime.Min()); // in order to resrict waiting time from being more than 120
-                    if (ratio < 1)
+
+                    ed.WriteMessage("\nPlease enter the needed time ");
+                    foreach (List<Line> pedesCol in pedesConnectors)
                     {
-                        foreach (int _case in distinctCases)
+                        string colour = "";
+                        foreach(Line pedes in pedesCol)
                         {
-                            caseGreenTime[_case] = (int)(caseGreenTime[_case] * ratio);
+                            colour = colour + Color.FromColorIndex(ColorMethod.ByColor, (short)(pedes.ColorIndex)).ColorNameForDisplay + " ";
+                        }
+                        loadOptions.Message = "for the " + colour + "pedestration routes\n";
+                        int t = (int)ed.GetDouble(loadOptions).Value;
+                        int totalTime = 0;
+                        foreach (Line pedes in pedesCol)
+                        {
+                            totalTime += caseGreenTime[pedes.ColorIndex - 3];
+                        }
+                        if (t > totalTime)
+                        {
+                            foreach (Line pedes in pedesCol)
+                            {
+                                caseGreenTime[pedes.ColorIndex - 3] += (t - totalTime) / pedesCol.Count;
+                            }
+                        }
+                        //var a = Color.FromColorIndex(ColorMethod.ByAci, (short)(_case.Value + 3)).ColorName;
+                    }
+                    if (caseGreenTime.Count > 0)
+                    {
+                        double ratio = (double)120 / (caseGreenTime.Sum() - caseGreenTime.Min()); // in order to resrict waiting time from being more than 120
+                        if (ratio < 1)
+                        {
+                            foreach (int _case in distinctCases)
+                            {
+                                caseGreenTime[_case] = (int)(caseGreenTime[_case] * ratio);
+                            }
                         }
                     }
-                    int w = 5;
+                    int j2 = 0;
+                    foreach (Curve connector in connectors)
+                    {
+                        var connectorType = connector.GetType();
+                        if (connectorType.Name == "Line")
+                        {
+                            routesToWrite = routesToWrite + "\t<route>" + connector.StartPoint + ", " + connector.EndPoint + ", " +
+                                loads[connector.ColorIndex - 3] + "," + (connector.ColorIndex-3) +" </route>\n";
+                        }
+                        else
+                        {
+                            routesToWrite = routesToWrite + "\t<route>" + curvesPointsColl[j2][0] + ", " + curvesPointsColl[j2][1] + ", "
+                                + curvesPointsColl[j2][2] + ", " + loads[connector.ColorIndex - 3] + "," + (connector.ColorIndex - 3) + " </route>\n";
+                            j2++;
+                        }
+                    }
+                    routesToWrite = routesToWrite + "</routes>\n";
+
+                    foreach(List<Line> pedesCol in pedesConnectors)
+                    {
+                        pedesRoutesToWrite = pedesRoutesToWrite + "\t<route>" + pedesCol[0].StartPoint + ", " + pedesCol[0].EndPoint + ", " +
+                                caseGreenTime[pedesCol[0].ColorIndex - 3] + "," + (pedesCol[0].ColorIndex - 3) + " </route>\n";
+                    }
+
+                    pedesRoutesToWrite = pedesRoutesToWrite + "</pedestrain_routes>\n";
 
                     foreach (int _case in distinctCases)
                     {
-                        ed.WriteMessage("for " + Color.FromColorIndex(ColorMethod.ByColor, (short)(_case + 3)).ColorNameForDisplay +
-                                                                "color we need: " + caseGreenTime[_case] + " seconds\n");
+                        ed.WriteMessage("for the " + Color.FromColorIndex(ColorMethod.ByColor, (short)(_case + 3)).ColorNameForDisplay +
+                                                                " routes we need: " + caseGreenTime[_case] + " seconds\n");
                     }
 
-
+                    PromptKeywordOptions KeyOptions = new PromptKeywordOptions("")
+                    {
+                        Message = "Would you like to export the data? \n",
+                        AllowNone = false
+                    };
+                    KeyOptions.Keywords.Add("Yes");
+                    KeyOptions.Keywords.Add("No");
+                    PromptResult KeyRes = ed.GetKeywords(KeyOptions);
+                    if (KeyRes.StringResult == "Yes")
+                    {
+                        SaveFileDialog sfd = new SaveFileDialog("Save schedule calculating data file results", null, "xml", "DataFileToCalculate",
+                                     SaveFileDialog.SaveFileDialogFlags.DoNotTransferRemoteFiles);
+                        
+                        if (sfd.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+                        {
+                            File.WriteAllText(sfd.Filename, routesToWrite + "\n" + pedesRoutesToWrite);
+                        }
+                        
+                    }
                     tr.Commit();
                 }
                 // There are selected entities
@@ -570,11 +1166,26 @@ namespace AutoCAD_CSharp_plug_in1
             return turnAngle;
         }
 
+        public bool isVisitedBy(Shape arrow, int dir)
+        {
+            foreach(double d in visitedBy)
+            { double angle = arrow.getTurnAngle(dir);
+                if (d == angle)
+                {
+                    return true;
+                }
+                    
+            }
+            return false;
+
+        }
 
         public List<Line> lines = new List<Line>();
+        public List<double> visitedBy = new List<double>();
         public int height;
         public string Type;
         public double startAngle;
+        public int load;
         public List<double> angles = new List<double>();
     }
 
@@ -592,4 +1203,6 @@ namespace AutoCAD_CSharp_plug_in1
         }
         public List<Line> headLines;
     }
+
+
 }
