@@ -100,8 +100,8 @@ namespace AutoCAD_CSharp_plug_in1
                                 coords = matches[2].Value.Split(',');
 
                                 Line connector = new Line(point1, point2);
-                                loadForConnectors.Add(int.Parse(coords[0]));
-                                connector.ColorIndex = int.Parse(coords[1]) + 3;
+                                loadForConnectors.Add((int)double.Parse(coords[0])); 
+                                connector.ColorIndex = (int)double.Parse(coords[1]) + 3;
                                 connectors.Add(connector);
                             }
 
@@ -316,10 +316,10 @@ namespace AutoCAD_CSharp_plug_in1
                                 {
                                     caseCapacity++;
                                     caseLengthAvg[_case] += connector.GetDistanceAtParameter(connector.EndParam - connector.StartParam);
-                                    //int w = 0;
-                                }
-
+                                //calculating the average total for each case 
                             }
+
+                        }
                             caseLengthAvg[_case] /= caseCapacity;
                             loads[_case] /= caseCapacity;
                             caseGreenTime.Add((int)(caseLengthAvg[_case] * loads[_case] / 40) + 5);
@@ -1062,7 +1062,27 @@ namespace AutoCAD_CSharp_plug_in1
 
                     pedesRoutesToWrite = pedesRoutesToWrite + "</pedestrain_routes>\n";
 
-                    foreach (int _case in distinctCases)
+                    int[] arr = distinctCases.ToArray();
+                    int[] green = caseGreenTime.ToArray();
+
+                    int temp1, temp2;
+                    for (int j = 0; j <= arr.Length - 2; j++)
+                    {
+                        for (int i3 = 0; i3 <= arr.Length - 2; i3++)
+                        {
+                            if (green[i3] < green[i3 + 1])
+                            {
+                                temp1 = arr[i3 + 1];
+                                arr[i3 + 1] = arr[i3];
+                                arr[i3] = temp1;
+                                temp2 = green[i3 + 1];
+                                green[i3 + 1] = green[i3];
+                                green[i3] = temp2;
+                            }
+                        }
+                    }
+
+                    foreach (int _case in arr)
                     {
                         ed.WriteMessage("for the " + Color.FromColorIndex(ColorMethod.ByColor, (short)(_case + 3)).ColorNameForDisplay +
                                                                 " routes we need: " + caseGreenTime[_case] + " seconds\n");
